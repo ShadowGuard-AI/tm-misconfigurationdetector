@@ -40,12 +40,14 @@ class MisconfigurationDetector:
         try:
             with open(rules_file, 'r') as f:
                 if rules_file.endswith('.yaml') or rules_file.endswith('.yml'):
+                    # The parser is chosen by the file name ending, case included. A rules file called RULES.YAML matches neither branch and is reported as unsupported, even though its contents are fine, and a file named .json holding YAML gets the strict JSON parser and fails.
                     return yaml.safe_load(f)
                 elif rules_file.endswith('.json'):
                     return json.load(f)
                 else:
                     logging.error(f"Unsupported file format for rules file: {rules_file}")
                     return {}
+        # Every load failure in this method returns the same empty dict as a rules file that legitimately holds no rules. The detector then scans with no rules and reports no misconfigurations, so a typo in a file name and a clean configuration produce the same headline result. Main checks existence first, which covers the CLI path, but a caller using the class directly gets no such guard.
         except FileNotFoundError:
             logging.error(f"Rules file not found: {rules_file}")
             return {}
@@ -72,6 +74,7 @@ class MisconfigurationDetector:
         findings = []
         config_data = self._load_config(config_file)
 
+        # An empty configuration loads as an empty dict or None and takes this same exit. A file that exists and parses but holds nothing is therefore reported exactly like a file that failed to load at all.
         if not config_data:
             return findings # Return empty findings list if loading failed.
 
@@ -88,6 +91,7 @@ class MisconfigurationDetector:
                         logging.warning(f"Rule '{rule_name}' of type 'jsonschema' missing 'schema' attribute. Skipping.")
                         continue
                     try:
+                        # validate raises on the first violation it finds, so one schema rule produces at most one finding, however many places the configuration breaks that schema. The count of findings is a count of failed rules, not of problems.
                         jsonschema.validate(instance=config_data, schema=rule_details['schema'])
                     except jsonschema.ValidationError as e:
                         # Validation failed, meaning a misconfiguration was found.
@@ -106,6 +110,7 @@ class MisconfigurationDetector:
                     # Evaluate the custom condition (simplified example).
                     condition = rule_details['condition']
                     try:
+                        # This eval is the sharpest line in the file. The globals dict is empty apart from the builtins Python adds back on its own, and config is the only name offered, but the condition still comes from the rules file, so whoever can write the rules file can run code here. I treat the rules file as trusted input for exactly this reason.
                         if eval(condition, {}, {'config': config_data}):  # WARNING: Use eval carefully!  Prefer safer alternatives.
                             finding = {
                                 'description': rule_details.get('description', f"Custom condition '{condition}' failed."),
@@ -174,6 +179,7 @@ class MisconfigurationDetector:
     def visualize_graph(self, output_file="threat_model.png"):
         """Visualizes the threat model graph and saves it to a file."""
         try:
+            # Spring layout is not seeded, so the picture moves every run. Two threat model images from the same graph will not line up, which makes the output a presentation aid and not something a reader can diff.
             pos = nx.spring_layout(self.G)  # Layout algorithm
             nx.draw(self.G, pos, with_labels=True, node_size=1500, node_color="skyblue", font_size=10, font_weight="bold")
             plt.savefig(output_file)
@@ -224,6 +230,7 @@ def main():
         attributes = {}
         for i in range(1, len(args.add_node)):
             try:
+                # Splitting on every equals sign means a value that itself contains one raises ValueError and ends the run before any scanning happens. The graph options sit in front of the scan in main, so a bad attribute string costs the whole run, not just the node.
                 key, value = args.add_node[i].split("=")
                 attributes[key] = value
             except ValueError:
